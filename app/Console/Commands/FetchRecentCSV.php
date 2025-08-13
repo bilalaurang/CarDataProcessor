@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use App\Models\Car;
 use Exception;
+use Illuminate\Support\Facades\DB;
 
 class FetchRecentCSV extends Command
 {
@@ -14,49 +15,49 @@ class FetchRecentCSV extends Command
 
     public function handle()
     {
-        $this->info('🚀 Starting CSV fetch from Google Drive...');
+        $this->info(' Starting CSV fetch from Google Drive...');
         
         // Get access token
-        $this->info('🔑 Getting access token...');
+        $this->info(' Getting access token...');
         $accessToken = $this->getAccessToken();
         
         if (!$accessToken) {
-            $this->error('❌ Failed to get access token');
+            $this->error(' Failed to get access token');
             return 1;
         }
         
-        $this->info('✅ Access token obtained successfully');
+        $this->info(' Access token obtained successfully');
         
         // Search for files
-        $this->info('📂 Searching for files in folder...');
+        $this->info(' Searching for files in folder...');
         $files = $this->listFiles($accessToken);
         
         if (empty($files)) {
-            $this->error('❌ No files found in the folder');
+            $this->error(' No files found in the folder');
             return 1;
         }
         
         // Get the most recent file
         $latestFile = $files[0];
-        $this->info("📄 Found file: {$latestFile['name']}");
-        $this->info("📅 Modified: " . ($latestFile['modifiedTime'] ?? 'Unknown'));
+        $this->info(" Found file: {$latestFile['name']}");
+        $this->info(" Modified: " . ($latestFile['modifiedTime'] ?? 'Unknown'));
         
         // Download file
-        $this->info('⬇️ Downloading file...');
+        $this->info(' Downloading file...');
         $csvContent = $this->downloadFile($latestFile['id'], $accessToken);
         
         if (!$csvContent) {
-            $this->error('❌ Failed to download file');
+            $this->error(' Failed to download file');
             return 1;
         }
         
-        $this->info('✅ File downloaded successfully (' . number_format(strlen($csvContent)) . ' bytes)');
+        $this->info('File downloaded successfully (' . number_format(strlen($csvContent)) . ' bytes)');
         
         // Process CSV
-        $this->info('🔄 Processing CSV data...');
+        $this->info(' Processing CSV data...');
         $this->processCSV($csvContent);
         
-        $this->info('✅ CSV processing completed successfully!');
+        $this->info(' CSV processing completed successfully!');
         return 0;
     }
     
@@ -65,7 +66,7 @@ class FetchRecentCSV extends Command
         $keyPath = env('GOOGLE_DRIVE_SERVICE_ACCOUNT_KEY_PATH');
         
         if (!$keyPath || !file_exists($keyPath)) {
-            $this->error('❌ Service account key file not found');
+            $this->error(' Service account key file not found');
             return null;
         }
         
@@ -136,178 +137,122 @@ class FetchRecentCSV extends Command
     
     private function processCSV($csvContent)
     {
-        // Create temporary file to work with built-in PHP CSV functions
-        $tempFile = tempnam(sys_get_temp_dir(), 'csv_');
-        file_put_contents($tempFile, $csvContent);
-        
         try {
-            // Use PHP's built-in CSV functions instead of League\Csv for robust parsing
-            $handle = fopen($tempFile, 'r');
+            // CRITICAL FIX: Use simple line-by-line processing
+            $lines = explode("\n", $csvContent);
+            $lines = array_values(array_filter($lines, function($line) {
+                return trim($line) !== '';
+            }));
             
-            if (!$handle) {
-                throw new Exception('Could not open CSV file');
+            if (empty($lines)) {
+                throw new Exception('CSV file appears to be empty');
             }
             
-            // Read headers (first line)
-            $headers = fgetcsv($handle, 0, ',');
-            
-            // Handle different delimiters if comma doesn't work
-            if (!$headers || count($headers) < 2) {
-                rewind($handle);
-                $headers = fgetcsv($handle, 0, ';'); // Try semicolon
-            }
-            if (!$headers || count($headers) < 2) {
-                rewind($handle);
-                $headers = fgetcsv($handle, 0, "\t"); // Try tab
-            }
-            
-            if (!$headers) {
-                throw new Exception('Could not parse CSV headers');
-            }
-            
-            // Clean headers (remove BOM, trim whitespace)
+            // Get headers
+            $headerLine = array_shift($lines);
+            $headers = str_getcsv($headerLine);
             $headers = array_map(function($header) {
                 return trim(str_replace("\xEF\xBB\xBF", '', $header));
             }, $headers);
             
-            $this->info('📊 Header count: ' . count($headers));
-            $this->info('📋 Headers: ' . implode(', ', array_slice($headers, 0, 5)) . '...');
+            $this->info(' Header count: ' . count($headers));
+            $this->info(' Headers: ' . implode(', ', array_slice($headers, 0, 5)) . '...');
             
-            // Count total rows first
-            $totalRows = 0;
-            while (fgetcsv($handle) !== FALSE) {
-                $totalRows++;
+            $totalRows = count($lines);
+            $this->info(" Total rows to process: {$totalRows}");
+            
+            if ($totalRows === 0) {
+                $this->warn(' No data rows found in CSV');
+                return;
             }
             
-            $this->info("📈 Total rows to process: {$totalRows}");
+            // CRITICAL FIX: Process in small batches to avoid hanging
+            $batchSize = 10; // Process 10 rows at a time
+            $batches = array_chunk($lines, $batchSize);
             
-            // Reset file pointer to start after headers
-            rewind($handle);
-            fgetcsv($handle); // Skip headers
-            
-            // Create progress bar
             $progressBar = $this->output->createProgressBar($totalRows);
             $progressBar->start();
             
             $processedCount = 0;
-            $rowNumber = 1; // Start from 1 (after header)
+            $skippedCount = 0;
             
-            // Process each row
-            while (($row = fgetcsv($handle, 0, ',')) !== FALSE) {
+            foreach ($batches as $batchIndex => $batch) {
+                $this->info("\n Processing batch " . ($batchIndex + 1) . "/" . count($batches));
+                
+                // Use database transactions for each batch
+                DB::beginTransaction();
+                
                 try {
-                    // Skip empty rows
-                    if (empty(array_filter($row))) {
+                    foreach ($batch as $line) {
+                        // Parse row
+                        $row = str_getcsv(trim($line));
+                        
+                        if (empty($row) || (count($row) === 1 && trim($row[0]) === '')) {
+                            $skippedCount++;
+                            $progressBar->advance();
+                            continue;
+                        }
+                        
+                        // Create row data
+                        $rowData = [];
+                        for ($i = 0; $i < min(count($headers), count($row)); $i++) {
+                            $rowData[$headers[$i]] = trim($row[$i]);
+                        }
+                        
+                        // Process record
+                        if (!empty($rowData['Ad ID'])) {
+                            $data = [
+                                'ad_id' => $rowData['Ad ID'],
+                                'activated_at' => $rowData['Activated At'] ?? null,
+                                'category_id' => $rowData['Category ID'] ?? null,
+                                'uuid' => $rowData['UUID'] ?? null,
+                                'has_whatsapp_number' => strtoupper($rowData['Has Whatsapp Number'] ?? '') === 'TRUE',
+                                'make' => $rowData['Make'] ?? null,
+                                'model' => $rowData['Model'] ?? null,
+                                'title' => $rowData['Title'] ?? null,
+                                'price' => is_numeric($rowData['Price'] ?? '') ? $rowData['Price'] : null,
+                                'year' => is_numeric($rowData['Year of the car'] ?? '') ? $rowData['Year of the car'] : null,
+                                'color' => $rowData['Color'] ?? null,
+                            ];
+                            
+                            // CRITICAL FIX: Use INSERT IGNORE to avoid constraint violations
+                            DB::table('cars')->insertOrIgnore($data);
+                            $processedCount++;
+                        } else {
+                            $skippedCount++;
+                        }
+                        
                         $progressBar->advance();
-                        $rowNumber++;
-                        continue;
                     }
                     
-                    // Handle rows with different column counts
-                    $rowData = [];
-                    for ($i = 0; $i < count($headers); $i++) {
-                        $rowData[$headers[$i]] = isset($row[$i]) ? trim($row[$i]) : null;
-                    }
-                    
-                    // Process the record
-                    $this->processRecord($rowData);
-                    $processedCount++;
+                    DB::commit();
+                    $this->info("  Batch " . ($batchIndex + 1) . " completed");
                     
                 } catch (Exception $e) {
-                    $this->warn("⚠️ Error processing row {$rowNumber}: " . $e->getMessage());
+                    DB::rollBack();
+                    $this->warn("  Batch " . ($batchIndex + 1) . " failed: " . $e->getMessage());
+                    
+                    // Still advance progress bar for failed batch
+                    foreach ($batch as $line) {
+                        $progressBar->advance();
+                    }
                 }
                 
-                // Advance progress bar
-                $progressBar->advance();
+                // Force progress display
+                $progressBar->display();
                 
-                // Update display every 50 records
-                if ($processedCount % 50 === 0) {
-                    $progressBar->display();
-                    usleep(1000);
-                }
-                
-                $rowNumber++;
+                // Small delay between batches
+                usleep(100000); // 0.1 second
             }
             
-            fclose($handle);
             $progressBar->finish();
             $this->newLine();
-            $this->info("✅ Successfully processed {$processedCount}/{$totalRows} records");
+            $this->info(" Processing completed!");
+            $this->info(" Successfully processed: {$processedCount} records");
+            $this->info(" Skipped: {$skippedCount} empty/invalid rows");
             
         } catch (Exception $e) {
-            $this->error('❌ Error processing CSV: ' . $e->getMessage());
-        } finally {
-            // Clean up temp file
-            if (file_exists($tempFile)) {
-                unlink($tempFile);
-            }
+            $this->error(' Error processing CSV: ' . $e->getMessage());
         }
-    }
-    
-    private function processRecord($record)
-    {
-        // Extract data from record with error handling
-        $data = [
-            'ad_id' => $record['Ad ID'] ?? null,
-            'activated_at' => !empty($record['Activated At']) ? $record['Activated At'] : null,
-            'category_id' => $record['Category ID'] ?? null,
-            'uuid' => $record['UUID'] ?? null,
-            'has_whatsapp_number' => $record['Has Whatsapp Number'] ?? null,
-            'seating_capacity' => $record['Seating Capacity'] ?? null,
-            'engine_capacity' => $record['Engine Capacity'] ?? null,
-            'target_market' => $record['Target Market'] ?? null,
-            'is_premium' => $record['Is Premium'] ?? null,
-            'make' => $record['Make'] ?? null,
-            'model' => $record['Model'] ?? null,
-            'trim' => $record['Trim'] ?? null,
-            'url' => $record['Url'] ?? null,
-            'title' => $record['Title'] ?? null,
-            'seller_name' => $record['Dealer or seller name'] ?? null,
-            'seller_phone_number' => $record['Seller phone number'] ?? null,
-            'seller_type' => $record['Seller type'] ?? null,
-            'posted_on' => !empty($record['Posted on']) ? $record['Posted on'] : null,
-            'year' => $record['Year of the car'] ?? null,
-            'price' => $record['Price'] ?? null,
-            'kilometers' => $record['Kilometers'] ?? null,
-            'color' => $record['Color'] ?? null,
-            'doors' => $record['Doors'] ?? null,
-            'cylinders' => $record['No. of Cylinders'] ?? null,
-            'warranty' => $record['Warranty'] ?? null,
-            'body_condition' => $record['Body condition'] ?? null,
-            'mechanical_condition' => $record['Mechanical condition'] ?? null,
-            'fuel_type' => $record['Fuel type'] ?? null,
-            'regional_specs' => $record['Regional specs'] ?? null,
-            'body_type' => $record['Body type'] ?? null,
-            'steering_side' => $record['Steering side'] ?? null,
-            'horsepower' => $record['Horsepower'] ?? null,
-            'transmission_type' => $record['Transmission type'] ?? null,
-            'location' => $record['Location of the car'] ?? null,
-            'image_urls' => $record['Image urls'] ?? null,
-        ];
-        
-        // Skip if essential fields are missing
-        if (empty($data['ad_id'])) {
-            return;
-        }
-        
-        // Convert boolean-like strings
-        $data['has_whatsapp_number'] = strtoupper($data['has_whatsapp_number']) === 'TRUE';
-        $data['is_premium'] = strtoupper($data['is_premium']) === 'TRUE';
-        
-        // Clean numeric fields
-        if (!empty($data['price'])) {
-            $data['price'] = preg_replace('/[^0-9.]/', '', $data['price']);
-        }
-        if (!empty($data['kilometers'])) {
-            $data['kilometers'] = preg_replace('/[^0-9.]/', '', $data['kilometers']);
-        }
-        if (!empty($data['year'])) {
-            $data['year'] = preg_replace('/[^0-9]/', '', $data['year']);
-        }
-        
-        // Use updateOrCreate to avoid duplicate key errors
-        Car::updateOrCreate(
-            ['ad_id' => $data['ad_id']],
-            $data
-        );
     }
 }
