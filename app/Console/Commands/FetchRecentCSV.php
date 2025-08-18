@@ -63,7 +63,7 @@ class FetchRecentCSV extends Command
     
     private function getAccessToken()
     {
-        $keyPath = env('GOOGLE_DRIVE_SERVICE_ACCOUNT_KEY_PATH');
+        $keyPath = env('GOOGLE_APPLICATION_CREDENTIALS');
         
         if (!$keyPath || !file_exists($keyPath)) {
             $this->error(' Service account key file not found');
@@ -199,23 +199,45 @@ class FetchRecentCSV extends Command
                             $rowData[$headers[$i]] = trim($row[$i]);
                         }
                         
-                        // Process record
+                        // Process record with all columns
                         if (!empty($rowData['Ad ID'])) {
                             $data = [
                                 'ad_id' => $rowData['Ad ID'],
                                 'activated_at' => $rowData['Activated At'] ?? null,
                                 'category_id' => $rowData['Category ID'] ?? null,
                                 'uuid' => $rowData['UUID'] ?? null,
-                                'has_whatsapp_number' => strtoupper($rowData['Has Whatsapp Number'] ?? '') === 'TRUE',
+                                'has_whatsapp_number' => filter_var($rowData['Has Whatsapp Number'] ?? 'false', FILTER_VALIDATE_BOOLEAN),
+                                'seating_capacity' => is_numeric($rowData['Seating Capacity'] ?? '') ? (int)$rowData['Seating Capacity'] : null,
+                                'engine_capacity' => is_numeric($rowData['Engine Capacity'] ?? '') ? (int)$rowData['Engine Capacity'] : null,
+                                'target_market' => $rowData['Target Market'] ?? null,
+                                'is_premium' => filter_var($rowData['Is Premium'] ?? 'false', FILTER_VALIDATE_BOOLEAN),
                                 'make' => $rowData['Make'] ?? null,
                                 'model' => $rowData['Model'] ?? null,
+                                'trim' => $rowData['Trim'] ?? null,
+                                'url' => $rowData['Url'] ?? null,
                                 'title' => $rowData['Title'] ?? null,
+                                'seller_name' => $rowData['Dealer or seller name'] ?? null,
+                                'seller_phone_number' => $rowData['Seller phone number'] ?? null,
+                                'seller_type' => $rowData['Seller type'] ?? null,
+                                'posted_on' => $rowData['Posted on'] ?? null,
+                                'year' => is_numeric($rowData['Year of the car'] ?? '') ? (int)$rowData['Year of the car'] : null,
                                 'price' => is_numeric($rowData['Price'] ?? '') ? $rowData['Price'] : null,
-                                'year' => is_numeric($rowData['Year of the car'] ?? '') ? $rowData['Year of the car'] : null,
+                                'kilometers' => is_numeric($rowData['Kilometers'] ?? '') ? (int)$rowData['Kilometers'] : null,
                                 'color' => $rowData['Color'] ?? null,
+                                'doors' => is_numeric($rowData['Doors'] ?? '') ? (int)$rowData['Doors'] : null,
+                                'cylinders' => is_numeric($rowData['No. of Cylinders'] ?? '') ? (int)$rowData['No. of Cylinders'] : null,
+                                'warranty' => $rowData['Warranty'] ?? null,
+                                'body_condition' => $rowData['Body condition'] ?? null,
+                                'mechanical_condition' => $rowData['Mechanical condition'] ?? null,
+                                'fuel_type' => $rowData['Fuel type'] ?? null,
+                                'regional_specs' => $rowData['Regional specs'] ?? null,
+                                'body_type' => $rowData['Body type'] ?? null,
+                                'steering_side' => $rowData['Steering side'] ?? null,
+                                'horsepower' => is_numeric($rowData['Horsepower'] ?? '') ? (int)$rowData['Horsepower'] : null,
+                                'transmission_type' => $rowData['Transmission type'] ?? null,
+                                'location' => $rowData['Location of the car'] ?? null,
+                                'image_urls' => $rowData['Image urls'] ?? null,
                             ];
-                            
-                            // CRITICAL FIX: Use INSERT IGNORE to avoid constraint violations
                             DB::table('cars')->insertOrIgnore($data);
                             $processedCount++;
                         } else {
@@ -224,33 +246,26 @@ class FetchRecentCSV extends Command
                         
                         $progressBar->advance();
                     }
-                    
                     DB::commit();
                     $this->info("  Batch " . ($batchIndex + 1) . " completed");
-                    
                 } catch (Exception $e) {
                     DB::rollBack();
                     $this->warn("  Batch " . ($batchIndex + 1) . " failed: " . $e->getMessage());
-                    
-                    // Still advance progress bar for failed batch
                     foreach ($batch as $line) {
                         $progressBar->advance();
                     }
                 }
-                
-                // Force progress display
                 $progressBar->display();
-                
-                // Small delay between batches
-                usleep(100000); // 0.1 second
+                usleep(100000);
             }
-            
             $progressBar->finish();
             $this->newLine();
             $this->info(" Processing completed!");
             $this->info(" Successfully processed: {$processedCount} records");
             $this->info(" Skipped: {$skippedCount} empty/invalid rows");
-            
+            $this->info(" Errors: " . ($totalRows - $processedCount - $skippedCount) . " records failed");
+            $this->info(" Total records in database: " . DB::table('cars')->count());
+            $this->info(" CSV processing completed successfully!");
         } catch (Exception $e) {
             $this->error(' Error processing CSV: ' . $e->getMessage());
         }
