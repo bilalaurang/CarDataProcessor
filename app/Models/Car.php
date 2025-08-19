@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 
 class Car extends Model
 {
-    
     protected $fillable = [
         'ad_id', 'activated_at', 'category_id', 'uuid', 'has_whatsapp_number',
         'seating_capacity', 'engine_capacity', 'target_market', 'is_premium',
@@ -14,12 +13,7 @@ class Car extends Model
         'seller_phone_number', 'seller_type', 'posted_on', 'year', 'price',
         'kilometers', 'color', 'doors', 'cylinders', 'warranty',
         'body_condition', 'mechanical_condition', 'fuel_type', 'regional_specs',
-        'body_type', 'steering_side', 'horsepower', 'transmission_type',
-        'location', 'image_urls'
-    ];
-
-    protected $casts = [
-        'activated_at' => 'datetime',
-        'posted_on' => 'datetime',
+        'body_type', 'steering_side', 'horsepower', 'transmission_type', 'location',
+        'image_urls'
     ];
 }

@@ -1,25 +1,18 @@
-<IfModule mod_rewrite.c>
-    <IfModule mod_negotiation.c>
-        Options -MultiViews -Indexes
-    </IfModule>
+# PHP Configuration for CSV Processing
+php_value memory_limit 1G
+php_value max_execution_time 1800
+php_value max_input_time 1800
+php_value post_max_size 100M
+php_value upload_max_filesize 100M
+php_value max_input_vars 10000
+php_value max_file_uploads 100
 
-    RewriteEngine On
+# Enable error reporting for debugging (remove in production)
+php_flag display_errors On
+php_value error_reporting E_ALL
 
-    # Handle Authorization Header
-    RewriteCond %{HTTP:Authorization} .
-    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+# Increase buffer size for large operations
+php_value output_buffering 4096
 
-    # Handle X-XSRF-Token Header
-    RewriteCond %{HTTP:x-xsrf-token} .
-    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
-
-    # Redirect Trailing Slashes If Not A Folder...
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_URI} (.+)/$
-    RewriteRule ^ %1 [L,R=301]
-
-    # Send Requests To Front Controller...
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteRule ^ index.php [L]
-</IfModule>
+# For large CSV files
+php_value auto_detect_line_endings On
